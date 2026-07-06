@@ -111,4 +111,13 @@ class MockTransport implements TransportInterface
     {
         // does nothing
     }
+
+    public function sendRequest(\Psr\Http\Message\RequestInterface $request, array $options = [])
+    {
+        $promise = new Promise(function () use (&$promise, $request) {
+            $promise->resolve(new \GuzzleHttp\Psr7\Response(200, ['X-Goog-Upload-Status' => 'active'], ''));
+        });
+        return $promise;
+    }
 }
+

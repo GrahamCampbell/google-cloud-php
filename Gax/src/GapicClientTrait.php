@@ -169,6 +169,36 @@ trait GapicClientTrait
     }
 
     /**
+     * Resume an existing resumable upload session.
+     *
+     * @param string $uploadUrl The resumable upload session URL.
+     * @param int $chunkSize Optional. The preferred chunk size in bytes.
+     * @return ResumableUpload\ResumableUploader
+     */
+    public function resumeUpload(string $uploadUrl, int $chunkSize = 8388608): ResumableUpload\ResumableUploader
+    {
+        $defaults = self::getClientDefaults();
+        $transport = $this->transport instanceof Transport\RestTransport || $this->transport instanceof Transport\GrpcFallbackTransport
+            ? $this->transport
+            : $this->createTransport(
+                $defaults['apiEndpoint'] ?? 'https://googleapis.com',
+                'rest',
+                $defaults['transportConfig'] ?? []
+            );
+
+        return new ResumableUpload\ResumableUploader(
+            $transport,
+            $this->credentialsWrapper,
+            $this->agentHeader,
+            $defaults['apiEndpoint'] ?? '',
+            uploadUrl: $uploadUrl,
+            chunkSize: $chunkSize
+        );
+    }
+
+
+
+    /**
      * Get the transport for the client. This method is protected to support
      * use by customized clients.
      *
