@@ -87,62 +87,24 @@ class ResumableUploader
      */
     public function startUpload(StreamInterface $dataStream): bool
     {
-        $initialState = null;
-        if ($this->uploadUrl !== null) {
-            $initialState = new ResumableUploadState(
-                phase: ResumableUploadState::RECOVERY,
-                uploadUrl: $this->uploadUrl
-            );
-        }
+        $phase = $this->uploadUrl !== null ? 'RECOVERY' : 'STARTING';
+        $uploadUrl = $this->uploadUrl;
+        $committedOffset = 0;
+        $chunkGranularity = 1;
+        $recoveryAttempts = 0;
+        $lastRecoveryOffset = -1;
+        $previousPhase = 'STARTING';
 
-        $session = new ResumableUploadSession($initialState);
-        $event = new ResumableUploadEvent(type: ResumableUploadEvent::START_UPLOAD);
         $buffer = '';
+        $hasBuffer = false;
+        $isEof = false;
 
         while (true) {
-            $instruction = $session->processEvent($event);
-
-            if ($instruction->action === ResumableUploadInstruction::TERMINATE_SUCCESS) {
+            if ($phase === 'DONE') {
                 return true;
             }
 
-            if ($instruction->action === ResumableUploadInstruction::TERMINATE_ERROR || $instruction->action === ResumableUploadInstruction::TERMINATE_REJECTED) {
-                throw $instruction->exception ?? new ApiException('Upload terminated with error', 0, ApiStatus::INTERNAL);
-            }
-
-            if ($instruction->action === ResumableUploadInstruction::READ_STREAM) {
-                $granularity = $session->getState()->chunkGranularity;
-                $effectiveChunkSize = $this->chunkSize ?? 8388608;
-                if ($granularity > 0 && ($effectiveChunkSize % $granularity !== 0)) {
-                    $effectiveChunkSize = (int) (floor($effectiveChunkSize / $granularity) * $granularity);
-                    if ($effectiveChunkSize === 0) {
-                        $effectiveChunkSize = $granularity;
-                    }
-                }
-
-                $committedOffset = $session->getState()->committedOffset;
-                if ($committedOffset > 0 && $dataStream->tell() !== $committedOffset) {
-                    $dataStream->seek($committedOffset);
-                }
-
-                $buffer = $dataStream->read($effectiveChunkSize);
-                $isEof = $dataStream->eof();
-
-                $event = new ResumableUploadEvent(
-                    type: $isEof ? ResumableUploadEvent::EOF_REACHED : ResumableUploadEvent::CHUNK_READ,
-                    bytesRead: strlen($buffer),
-                    isEof: $isEof,
-                    body: $buffer
-                );
-                continue;
-            }
-
-            $url = $session->getState()->uploadUrl ?? '';
-            $method = 'POST';
-            $headers = [];
-            $body = null;
-
-            if ($instruction->action === ResumableUploadInstruction::SEND_START) {
+            if ($phase === 'STARTING') {
                 $baseUri = $this->serviceAddress;
                 if (!str_starts_with($baseUri, 'http://') && !str_starts_with($baseUri, 'https://')) {
                     $baseUri = 'https://' . $baseUri;
@@ -151,59 +113,194 @@ class ResumableUploader
                 $headers = $this->initialHeaders;
                 $headers['X-Goog-Upload-Command'] = 'start';
                 $body = $this->requestMessage ? $this->requestMessage->serializeToJsonString() : '';
-            } else {
-                if ($instruction->commandHeader !== null) {
-                    $headers['X-Goog-Upload-Command'] = $instruction->commandHeader;
+
+                try {
+                    $response = $this->sendHttpRequest('POST', $url, $headers, $body);
+                    $statusCode = $response->getStatusCode();
+                    if ($statusCode === 200) {
+                        $uploadUrl = $this->getHeaderCaseInsensitive($response->getHeaders(), 'X-Goog-Upload-URL') ?? $uploadUrl;
+                        $chunkGranularity = (int) ($this->getHeaderCaseInsensitive($response->getHeaders(), 'X-Goog-Upload-Chunk-Granularity') ?? 1);
+                        $phase = 'TRANSMITTING';
+                    } else {
+                        $this->handleErrorResponse($response);
+                    }
+                } catch (\Exception $e) {
+                    $phase = $this->handleException($e, $phase, $committedOffset, $recoveryAttempts, $lastRecoveryOffset);
                 }
-                if ($instruction->offsetHeader !== null) {
-                    $headers['X-Goog-Upload-Offset'] = (string) $instruction->offsetHeader;
+                continue;
+            }
+
+            if ($phase === 'TRANSMITTING' || $phase === 'FINALIZING') {
+                if (!$hasBuffer) {
+                    $effectiveChunkSize = $this->chunkSize ?? 8388608;
+                    if ($chunkGranularity > 0 && ($effectiveChunkSize % $chunkGranularity !== 0)) {
+                        $effectiveChunkSize = (int) (floor($effectiveChunkSize / $chunkGranularity) * $chunkGranularity);
+                        if ($effectiveChunkSize === 0) {
+                            $effectiveChunkSize = $chunkGranularity;
+                        }
+                    }
+
+                    if ($committedOffset > 0 && $dataStream->tell() !== $committedOffset) {
+                        $dataStream->seek($committedOffset);
+                    }
+
+                    $buffer = $dataStream->read($effectiveChunkSize);
+                    $isEof = $dataStream->eof();
+                    $hasBuffer = true;
                 }
-                if ($instruction->action === ResumableUploadInstruction::SEND_UPLOAD || $instruction->action === ResumableUploadInstruction::SEND_UPLOAD_FINALIZE) {
+
+                $headers = [];
+                $headers['X-Goog-Upload-Offset'] = (string) $committedOffset;
+
+                if ($isEof) {
+                    $phase = 'FINALIZING';
+                    if (strlen($buffer) > 0) {
+                        $headers['X-Goog-Upload-Command'] = 'upload, finalize';
+                        $body = $buffer;
+                    } else {
+                        $headers['X-Goog-Upload-Command'] = 'finalize';
+                        $body = '';
+                    }
+                } else {
+                    $phase = 'TRANSMITTING';
+                    $headers['X-Goog-Upload-Command'] = 'upload';
                     $body = $buffer;
                 }
+
+                try {
+                    $response = $this->sendHttpRequest('POST', $uploadUrl, $headers, $body);
+                    $statusCode = $response->getStatusCode();
+                    if ($statusCode === 200) {
+                        if ($this->progressCallback && $headers['X-Goog-Upload-Command'] !== 'finalize') {
+                            ($this->progressCallback)($committedOffset + strlen($buffer));
+                        }
+
+                        $statusHeader = $this->getHeaderCaseInsensitive($response->getHeaders(), 'X-Goog-Upload-Status');
+                        if (strcasecmp((string) $statusHeader, 'final') === 0) {
+                            $phase = 'DONE';
+                        } else {
+                            $committedOffset += strlen($buffer);
+                            $hasBuffer = false;
+                            $phase = 'TRANSMITTING';
+                        }
+                    } else {
+                        $this->handleErrorResponse($response);
+                    }
+                } catch (\Exception $e) {
+                    $previousPhase = $phase;
+                    $phase = $this->handleException($e, $phase, $committedOffset, $recoveryAttempts, $lastRecoveryOffset);
+                }
+                continue;
             }
 
-            try {
-                $reqHeaders = array_merge($this->agentHeader, $headers);
-                if ($this->credentialsWrapper) {
-                    $reqHeaders = $this->credentialsWrapper->addCredentialsToRequestHeaders($reqHeaders);
-                }
+            if ($phase === 'RECOVERY') {
+                $headers = ['X-Goog-Upload-Command' => 'query'];
+                try {
+                    $response = $this->sendHttpRequest('POST', $uploadUrl, $headers, '');
+                    $statusCode = $response->getStatusCode();
+                    if ($statusCode === 200) {
+                        $serverOffsetStr = $this->getHeaderCaseInsensitive($response->getHeaders(), 'X-Goog-Upload-Size-Received');
+                        $serverOffset = $serverOffsetStr !== null ? (int) $serverOffsetStr : $committedOffset;
 
-                $request = new \GuzzleHttp\Psr7\Request($method, $url, $reqHeaders, $body);
-                if (!method_exists($this->transport, 'sendRequest')) {
-                    throw new ApiException('Resumable uploads require REST transport.', 0, ApiStatus::UNIMPLEMENTED);
-                }
-                $promise = $this->transport->sendRequest($request);
-                $response = $promise->wait();
+                        if ($serverOffset === $lastRecoveryOffset) {
+                            $recoveryAttempts++;
+                            if ($recoveryAttempts >= 3) {
+                                throw new ApiException('Exhausted recovery attempts with unchanged offset', 0, ApiStatus::ABORTED);
+                            }
+                        } else {
+                            $recoveryAttempts = 0;
+                        }
+                        $lastRecoveryOffset = $serverOffset;
+                        $committedOffset = $serverOffset;
+                        $hasBuffer = false;
 
-                $statusCode = $response->getStatusCode();
-                $respHeaders = $response->getHeaders();
-                $respBody = (string) $response->getBody();
-
-                if ($this->progressCallback && ($instruction->action === ResumableUploadInstruction::SEND_UPLOAD || $instruction->action === ResumableUploadInstruction::SEND_UPLOAD_FINALIZE)) {
-                    ($this->progressCallback)($session->getState()->committedOffset + strlen($buffer));
+                        $phase = $previousPhase === 'FINALIZING' ? 'FINALIZING' : 'TRANSMITTING';
+                    } else {
+                        $this->handleErrorResponse($response);
+                    }
+                } catch (\Exception $e) {
+                    $phase = $this->handleException($e, $phase, $committedOffset, $recoveryAttempts, $lastRecoveryOffset);
                 }
-
-                $event = new ResumableUploadEvent(
-                    type: ResumableUploadEvent::HTTP_RESPONSE,
-                    httpStatusCode: $statusCode,
-                    headers: $respHeaders,
-                    body: $respBody
-                );
-            } catch (\GuzzleHttp\Exception\RequestException $e) {
-                $code = $e->getCode();
-                if (in_array($code, [429, 500, 502, 503, 504])) {
-                    $event = new ResumableUploadEvent(type: ResumableUploadEvent::ERROR_TRANSIENT, exception: $e);
-                } elseif (in_array($code, [400, 412, 416])) {
-                    $event = new ResumableUploadEvent(type: ResumableUploadEvent::ERROR_RECOVERABLE, exception: $e);
-                } else {
-                    $event = new ResumableUploadEvent(type: ResumableUploadEvent::ERROR_FATAL, exception: $e);
-                }
-            } catch (\Exception $e) {
-                $event = new ResumableUploadEvent(type: ResumableUploadEvent::ERROR_FATAL, exception: $e);
+                continue;
             }
+
+            throw new ApiException("Unexpected phase: {$phase}", 0, ApiStatus::INTERNAL);
         }
     }
+
+    private function sendHttpRequest(string $method, string $url, array $headers, $body): \Psr\Http\Message\ResponseInterface
+    {
+        $reqHeaders = array_merge($this->agentHeader, $headers);
+        if ($this->credentialsWrapper) {
+            $reqHeaders = $this->credentialsWrapper->addCredentialsToRequestHeaders($reqHeaders);
+        }
+
+        $request = new \GuzzleHttp\Psr7\Request($method, $url, $reqHeaders, $body);
+        if (!method_exists($this->transport, 'sendRequest')) {
+            throw new ApiException('Resumable uploads require REST transport.', 0, ApiStatus::UNIMPLEMENTED);
+        }
+        $promise = $this->transport->sendRequest($request);
+        return $promise->wait();
+    }
+
+    private function getHeaderCaseInsensitive(array $headers, string $key): ?string
+    {
+        foreach ($headers as $k => $v) {
+            if (strcasecmp((string) $k, $key) === 0) {
+                return is_array($v) ? (string) reset($v) : (string) $v;
+            }
+        }
+        return null;
+    }
+
+    private function handleException(\Exception $e, string $phase, int $committedOffset, int &$recoveryAttempts, int $lastRecoveryOffset): string
+    {
+        $code = $e->getCode();
+        if ($e instanceof \GuzzleHttp\Exception\RequestException) {
+            $response = $e->getResponse();
+            if ($response) {
+                $code = $response->getStatusCode();
+            }
+        }
+
+        if (in_array($code, [429, 500, 502, 503, 504])) {
+            return $phase;
+        }
+
+        if (in_array($code, [400, 412, 416])) {
+            return 'RECOVERY';
+        }
+
+        if ($e instanceof ApiException) {
+            throw $e;
+        }
+        throw new ApiException(
+            $e->getMessage(),
+            $code,
+            ApiStatus::INTERNAL,
+            $e
+        );
+    }
+
+    private function handleErrorResponse(\Psr\Http\Message\ResponseInterface $response)
+    {
+        $statusCode = $response->getStatusCode();
+        $headers = $response->getHeaders();
+        $body = (string) $response->getBody();
+
+        $statusHeader = $this->getHeaderCaseInsensitive($headers, 'X-Goog-Upload-Status');
+        if (strcasecmp((string) $statusHeader, 'final') === 0) {
+            throw new ApiException(
+                $body ?: 'Upload rejected by server',
+                $statusCode,
+                ApiStatus::INVALID_ARGUMENT
+            );
+        }
+
+        throw new \GuzzleHttp\Exception\RequestException(
+            "HTTP error {$statusCode}",
+            new \GuzzleHttp\Psr7\Request('POST', ''),
+            $response
+        );
+    }
 }
-
-
