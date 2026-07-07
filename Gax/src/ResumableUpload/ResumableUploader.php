@@ -42,26 +42,33 @@ use Psr\Http\Message\StreamInterface;
 
 /**
  * User-facing helper object returned by generated client methods for Resumable Upload RPCs.
+ * Supports both V1 (callable HTTP handler) and V2 (TransportInterface) generated clients.
  */
 class ResumableUploader
 {
     private ?int $chunkSize = null;
     private $progressCallback = null;
+    private ?RetrySettings $retrySettings = null;
+    private array $initialHeaders = [];
 
     public function __construct(
-        private TransportInterface $transport,
+        private $transport,
         private ?CredentialsWrapper $credentialsWrapper = null,
         private array $agentHeader = [],
         private string $serviceAddress = '',
         private string $uploadPrefix = '/resumable/upload',
         private string $restPath = '',
         private ?Message $requestMessage = null,
-        private array $initialHeaders = [],
-        private ?RetrySettings $retrySettings = null,
-        private ?string $uploadUrl = null,
-        int $chunkSize = 8388608
+        private array $options = [],
+        private ?string $uploadUrl = null
     ) {
-        $this->chunkSize = $chunkSize;
+        $this->chunkSize = $options['chunkSize'] ?? 8388608;
+        $this->progressCallback = $options['progressCallback'] ?? null;
+        $this->retrySettings = $options['retrySettings'] ?? null;
+        $this->initialHeaders = $options['headers'] ?? [];
+        if (isset($options['uploadUrl'])) {
+            $this->uploadUrl = $options['uploadUrl'];
+        }
     }
 
     /**
@@ -236,11 +243,20 @@ class ResumableUploader
         }
 
         $request = new \GuzzleHttp\Psr7\Request($method, $url, $reqHeaders, $body);
-        if (!method_exists($this->transport, 'sendRequest')) {
-            throw new ApiException('Resumable uploads require REST transport.', 0, ApiStatus::UNIMPLEMENTED);
+
+        if ($this->transport instanceof TransportInterface) {
+            if (!method_exists($this->transport, 'sendRequest')) {
+                throw new ApiException('Resumable uploads require REST transport.', 0, ApiStatus::UNIMPLEMENTED);
+            }
+            $promise = $this->transport->sendRequest($request);
+            return $promise->wait();
+        } else {
+            $response = ($this->transport)($request);
+            if (is_object($response) && method_exists($response, 'wait')) {
+                $response = $response->wait();
+            }
+            return $response;
         }
-        $promise = $this->transport->sendRequest($request);
-        return $promise->wait();
     }
 
     private function getHeaderCaseInsensitive(array $headers, string $key): ?string
