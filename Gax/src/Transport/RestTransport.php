@@ -73,6 +73,22 @@ class RestTransport implements TransportInterface
     }
 
     /**
+     * @return string
+     */
+    public function getBaseUri(): string
+    {
+        return $this->requestBuilder->getBaseUri();
+    }
+
+    /**
+     * @return RequestBuilder
+     */
+    public function getRequestBuilder(): RequestBuilder
+    {
+        return $this->requestBuilder;
+    }
+
+    /**
      * Builds a RestTransport.
      *
      * @param string $apiEndpoint

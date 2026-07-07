@@ -49,10 +49,22 @@ class MockTransport implements TransportInterface
     use MockStubTrait;
 
     private $agentHeaderDescriptor; // @phpstan-ignore-line
+    private string $baseUri = 'https://example.com';
+
+    public function __construct($deserialize = null, string $baseUri = 'https://example.com')
+    {
+        $this->deserialize = $deserialize;
+        $this->baseUri = $baseUri;
+    }
 
     public function setAgentHeaderDescriptor($agentHeaderDescriptor)
     {
         $this->agentHeaderDescriptor = $agentHeaderDescriptor;
+    }
+
+    public function getBaseUri(): string
+    {
+        return $this->baseUri;
     }
 
     public function startUnaryCall(Call $call, array $options)

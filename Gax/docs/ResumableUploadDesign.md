@@ -13,8 +13,10 @@ Large, resilient HTTP/HTTPS file transfers in Google Cloud and Google Ads are po
 Based on the **Universal Resumable Upload Protocol Specification**, this document defines the complete architectural design for implementing Resumable Upload support in the **PHP Cloud SDK ecosystem**.
 
 The implementation requires synchronized changes across two core libraries:
-1. **GAX (`Google\ApiCore`)**: Introducing a robust runtime state machine (`ResumableUploadSession`, `ResumableUploadStateMachine`) and user-facing uploader (`ResumableUploader`). Network requests are executed directly through the generated GAPIC client via `GapicClientTrait` (supporting both new uploads and `resumeUpload`).
-2. **GAPIC Generator (`gapic-generator-php`)**: Updating AST generation in `GapicClientV2Generator` to emit factory methods returning `ResumableUploader` instances for opted-in resumable upload RPCs.
+1. **GAX (`Google\ApiCore`)**: Introducing a clean architectural separation:
+   - **`ResumableUploadTrait` & `ResumableUploadClient` (`Google\ApiCore\ResumableUpload\ResumableUploadClient`)**: Managed at the GAPIC client level via `ResumableUploadTrait`. Holds or constructs the required `RestTransport` (even when the GAPIC client is configured for gRPC), validates credentials, and executes the HTTP upload exchange loop directly.
+   - **`ResumableUpload` (`Google\ApiCore\ResumableUpload\ResumableUpload`)**: The minimal user-facing operation wrapper returned when a resumable upload RPC is invoked or resumed, exposing `startUpload()`.
+2. **GAPIC Generator (`gapic-generator-php`)**: Updating AST generation in `GapicClientV2Generator` so that when a service has resumable upload methods, it includes `ResumableUploadTrait`, initializes `resumableUploadClient` inside `__construct()`, and delegates opted-in RPCs to instantiate `ResumableUpload` directly.
 
 ---
 
@@ -47,53 +49,63 @@ $request = new CreateYouTubeVideoUploadRequest([
     'description' => 'Uploaded via Resumable Upload Protocol'
 ]);
 
-// 1. End-user calls generated client method and receives an initialized ResumableUploader
-$uploader = $client->createYouTubeVideoUpload($request, [
+// 1. End-user calls generated client method and receives an initialized ResumableUpload object
+$upload = $client->createYouTubeVideoUpload($request, [
     'chunkSize' => 8 * 1024 * 1024, // 8MB
-    'progressCallback' => function (int $bytesUploaded) {
-        echo "Successfully committed $bytesUploaded bytes\n";
+    'progressCallback' => function (int $bytesUploaded) use (&$upload) {
+        echo "Committed $bytesUploaded bytes to session: " . $upload->getUploadUrl() . "\n";
     }
 ]);
 
 // 2. End-user initiates upload by passing the video data stream
 $stream = GuzzleHttp\Psr7\Utils::streamFor(fopen('/path/to/video.mp4', 'r'));
-$result = $uploader->startUpload($stream);
+try {
+    $result = $upload->startUpload($stream);
+} catch (\Exception $e) {
+    // 3a. Resuming directly on the existing $upload object after an interruption in the same process:
+    // Calling `resume()` queries the server for the current byte offset and resumes transmitting remaining chunks.
+    $result = $upload->resume($stream);
+}
+
+// 3b. Resuming across separate processes or restarts (where the original $upload object in memory is lost):
+// The session URL obtained via `$upload->getUploadUrl()` can be persisted (e.g. in a database) and loaded later.
+$resumedUpload = $client->resumeUpload('https://upload.url/session123');
+$resumedUpload->resume($stream);
 ```
 
 ---
 
 ## 3. GAX (`Google\ApiCore\ResumableUpload`) Runtime Architecture
 
-To maximize testability, reuse existing middleware, and maintain separation of concerns, the runtime protocol implementation coordinates between `ResumableUploader` (user-facing I/O loop), the GAPIC client (`GapicClientTrait`), and stateless state tracking:
+To maximize testability, reuse existing middleware, and maintain separation of concerns, the runtime protocol implementation coordinates between the client lifecycle manager (`ResumableUploadClient`), user operation object (`ResumableUpload`), uploader (`ResumableUploader`), and stateless state tracking:
 
 ```mermaid
 graph TD
-    User[End-User Code] -->|startUpload| Uploader[ResumableUploader<br/>I/O Loop]
-    Uploader -->|sendRequest| Transport[RestTransport<br/>HTTP Execution]
-    Uploader -->|Pumps Events| Session[ResumableUploadSession<br/>State Tracking]
-    Session -->|Passes State & Events| StateMachine[ResumableUploadStateMachine<br/>Stateless Pure Logic]
-    StateMachine -->|Returns Instructions| Session
-    Session -->|Returns Instructions| Uploader
+    GapicClient[GAPIC Client / ResumableUploadTrait] -->|__construct| Client[ResumableUploadClient<br/>Transport, Auth & I/O Loop]
+    GapicClient -->|resumableMethod / resumeUpload| Upload[ResumableUpload<br/>Operation Wrapper]
+    Upload -->|startUpload| Client
+    Client -->|sendRequest| Transport[RestTransport<br/>HTTP Execution]
     Transport -->|HTTP POST/PUT| UploadServer[Google Resumable Endpoint]
 ```
 
-### A. The Uploader (`ResumableUploader`)
-`ResumableUploader` manages the stream reading, auth headers (`CredentialsWrapper`), and event loop, while delegating network execution to `TransportInterface::sendRequest()`.
+### A. The Client Trait & Manager (`ResumableUploadTrait` / `ResumableUploadClient`)
+`ResumableUploadTrait` is included (`use ResumableUploadTrait;`) in any generated GAPIC client whose service has resumable upload methods (`hasResumableUploadMethods()`).
+Inside the generated client constructor (`__construct(array $options = [])`), right after `setClientOptions()` and `createOperationsClient()`:
+```php
+$this->resumableUploadClient = $this->createResumableUploadClient($clientOptions);
+```
 - **Responsibilities**:
-  - Entry point `startUpload(StreamInterface $stream)`.
-  - Executes HTTP requests through the client's configured `RestTransport` (or automatically instantiates a `RestTransport` fallback inline if the client was configured for gRPC).
-  - Supports resuming existing sessions via `$client->resumeUpload($uploadUrl)`.
+  - `createResumableUploadClient(array $options)` constructs and returns a `ResumableUploadClient` (`Google\ApiCore\ResumableUpload\ResumableUploadClient`).
+  - Manages the REST transport (`RestTransport`) and authentication credentials (`CredentialsWrapper`).
+  - Reuses or builds `RestTransport` from gRPC transport credentials as needed, issuing warnings (`E_USER_WARNING`) when credentials are missing or incompatible.
+  - Implements the complete protocol I/O exchange loop (`STARTING`, `TRANSMITTING`, `FINALIZING`, `RECOVERY`) directly inside `startUpload(StreamInterface $dataStream, string $restPath, ?Message $requestMessage, array $options)`.
 
-### B. The Session (`Google\ApiCore\ResumableUpload\ResumableUploadSession`)
-Maintains mutable session state and buffers.
+### B. The Operation Wrapper (`Google\ApiCore\ResumableUpload\ResumableUpload`)
+`ResumableUpload` is the clean, user-facing operation object instantiated by generated RPC methods (`resumableMethod`) and `resumeUpload()`.
 - **Responsibilities**:
-  - Tracks current state machine phase (`INITIALIZING`, `STARTING`, `TRANSMITTING`, `FINALIZING`, `RECOVERY`, `CANCELLING`, `DONE`, `ERROR`, `REJECTED`).
-  - Maintains upload progress metrics (`$bytesUploaded`, `$committedOffset`, `$uploadUrl`).
-  - Maps raw Client I/O responses into structured `ResumableUploadEvent` DTOs.
-
-### C. The State Machine (`Google\ApiCore\ResumableUpload\ResumableUploadStateMachine`)
-A 100% stateless, deterministic class implementing the protocol transition tables.
-- **Signature**: `public static function decide(ResumableUploadState $state, ResumableUploadEvent $event): ResumableUploadInstruction`
+  - Stores all state passed via the constructor: the reference to `ResumableUploadClient`, the REST method path (`$restPath`), the domain protobuf request (`$requestMessage`), and upload preferences (`$options`).
+  - Keeps its public API minimal (`__construct` and `startUpload`).
+  - When `startUpload(StreamInterface $stream)` is invoked, it delegates directly to `ResumableUploadClient::startUpload($stream, $this->restPath, $this->requestMessage, $this->options)`.
 
 ---
 
@@ -144,29 +156,22 @@ To generate Resumable Upload client libraries automatically, the generator is en
 2. **Method Identification**: Add `MethodDetails::RESUMABLE_UPLOAD = 'resumable_upload'`. Detect methods opted into resumable uploads via proto annotations or service publishing configuration.
 
 ### 5.2 Client Code Emission (`GapicClientV2Generator`)
-For standard RPCs, the generator emits `$this->startCall(...)`. For `RESUMABLE_UPLOAD` RPCs (like `createYouTubeVideoUpload`), `GapicClientV2Generator` emits a factory method returning `ResumableUploader` (automatically building a `RestTransport` fallback if the client is using gRPC):
+When a service has resumable upload methods (`$this->serviceDetails->hasResumableUploadMethods()`), `GapicClientV2Generator` includes `ResumableUploadTrait` on the generated class and initializes `$this->resumableUploadClient = $this->createResumableUploadClient($clientOptions);` inside the constructor (`__construct`).
+For standard RPCs, the generator emits `$this->startCall(...)`. For `RESUMABLE_UPLOAD` RPCs (like `createYouTubeVideoUpload`), `GapicClientV2Generator` emits a factory method instantiating `ResumableUpload` directly:
 
 ```php
-public function createYouTubeVideoUpload(CreateYouTubeVideoUploadRequest $request, array $optionalArgs = []): ResumableUploader
+public function createYouTubeVideoUpload(CreateYouTubeVideoUploadRequest $request, array $optionalArgs = []): ResumableUpload
 {
     $requestParams = new RequestParamsHeaderDescriptor([...]);
     $optionalArgs += [
         'headers' => [],
     ];
-    $transport = $this->transport instanceof RestTransport || $this->transport instanceof GrpcFallbackTransport
-        ? $this->transport
-        : $this->createTransport('youtube.googleapis.com', 'rest', []);
 
-    return new ResumableUploader(
-        $transport,
-        $this->credentialsWrapper,
-        $this->agentHeader,
-        'youtube.googleapis.com',
-        '/resumable/upload', // configured upload prefix
+    return new ResumableUpload(
+        $this->getResumableUploadClient(),
         'v1/youTubeVideoUploads:create',
         $request,
-        $optionalArgs['headers'] ?? [],
-        $optionalArgs['retrySettings'] ?? null
+        $optionalArgs
     );
 }
 ```

@@ -70,6 +70,14 @@ class GrpcFallbackTransport implements TransportInterface
     }
 
     /**
+     * @return string
+     */
+    public function getBaseUri(): string
+    {
+        return $this->baseUri;
+    }
+
+    /**
      * Builds a GrpcFallbackTransport.
      *
      * @param string $apiEndpoint
