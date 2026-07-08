@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.335.0
+
+<details><summary>google/apps-chat 0.22.0</summary>
+
+
+
+### Features
+
+* [AppsChat] Add Availability Api's ([#9320](https://github.com/googleapis/google-cloud-php/issues/9320)) ([9e1e169](https://github.com/googleapis/google-cloud-php/commit/9e1e16935d9626cb19acbbd6c08689809cf7490b))
+
+</details>
+
+<details><summary>google/cloud-ces 0.3.0</summary>
+
+
+
+### Features
+
+* [Ces] update public libraries for CES v1 ([#9324](https://github.com/googleapis/google-cloud-php/issues/9324)) ([9902096](https://github.com/googleapis/google-cloud-php/commit/99020965fa5d4d4ee1e2dbdb37689346dee2d675))
+
+</details>
+
+<details><summary>google/cloud-memorystore 0.11.0</summary>
+
+
+
+### Features
+
+* [Memorystore] Add support for self managed migrations feature to Memorystore for Valkey ([#9326](https://github.com/googleapis/google-cloud-php/issues/9326)) ([266495c](https://github.com/googleapis/google-cloud-php/commit/266495c64fcc91ce462a7565023562efe5a8168e))
+
+</details>
+
 ## 0.334.0
 
 <details><summary>google/cloud-ai-platform 1.61.0</summary>
