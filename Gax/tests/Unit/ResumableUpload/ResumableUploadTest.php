@@ -59,6 +59,27 @@ class ResumableUploadTest extends TestCase
         $this->assertSame('v1/test:create', $pathProp->getValue($upload));
     }
 
+    public function testProgressCallbackReceivesUploadUrl()
+    {
+        $transport = new TestTransport([
+            new Response(200, ['X-Goog-Upload-Status' => 'active', 'X-Goog-Upload-URL' => 'https://upload.url/123']),
+            new Response(200, ['X-Goog-Upload-Status' => 'final'])
+        ]);
+
+        $client = new ResumableUploadClient($transport, serviceAddress: 'test.googleapis.com');
+        $callbackUrl = null;
+        $upload = new ResumableUpload($client, 'v1/test:create', new Timestamp(), [
+            'progressCallback' => function (int $bytes, string $url) use (&$callbackUrl) {
+                $callbackUrl = $url;
+            }
+        ]);
+
+        $stream = Utils::streamFor('hello world');
+        $upload->startUpload($stream);
+
+        $this->assertSame('https://upload.url/123', $callbackUrl);
+    }
+
     public function testStartUploadDelegation()
     {
         $transport = new TestTransport([
@@ -93,7 +114,7 @@ class ResumableUploadTest extends TestCase
         $this->assertEquals('https://upload.url/session123', $upload->getUploadUrl());
 
         $stream = Utils::streamFor('hello world');
-        $result = $upload->resume($stream);
+        $result = $upload->startUpload($stream);
 
         $this->assertTrue($result);
         $this->assertCount(2, $transport->requests);

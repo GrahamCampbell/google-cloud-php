@@ -245,7 +245,7 @@ class ResumableUploadClient
                     $statusCode = $response->getStatusCode();
                     if ($statusCode === 200) {
                         if ($progressCallback && $headers['X-Goog-Upload-Command'] !== 'finalize') {
-                            ($progressCallback)($committedOffset + strlen($buffer));
+                            ($progressCallback)($committedOffset + strlen($buffer), (string) $uploadUrl);
                         }
 
                         $statusHeader = $this->getHeaderCaseInsensitive($response->getHeaders(), 'X-Goog-Upload-Status');
@@ -360,7 +360,7 @@ class ResumableUploadClient
             $e->getMessage(),
             $code,
             ApiStatus::INTERNAL,
-            $e
+            ['previous' => $e]
         );
     }
 

@@ -77,7 +77,10 @@ class ResumableUpload
     }
 
     /**
-     * Starts the resumable upload exchange using the provided data stream.
+     * Starts or resumes the resumable upload exchange using the provided data stream.
+     * If this instance already has an `uploadUrl` (e.g. created via `$client->resumeUpload($uploadUrl)`
+     * or after a previous start/interruption), calling `startUpload($dataStream)` queries the server
+     * for the current byte offset and resumes transmitting remaining chunks.
      *
      * @param StreamInterface $dataStream
      * @return bool
@@ -88,19 +91,5 @@ class ResumableUpload
             $this->options['uploadUrl'] = $this->uploadUrl;
         }
         return $this->resumableUploadClient->startUpload($this, $dataStream, $this->restPath, $this->requestMessage, $this->options);
-    }
-
-    /**
-     * Resumes an interrupted upload using the provided data stream directly through this object.
-     * If the upload was interrupted midway in this exact instance, or if this instance was
-     * created via `$client->resumeUpload($uploadUrl)`, calling `resume($dataStream)` will query
-     * the server for the current byte offset and resume transmitting remaining bytes.
-     *
-     * @param StreamInterface $dataStream
-     * @return bool
-     */
-    public function resume(StreamInterface $dataStream): bool
-    {
-        return $this->startUpload($dataStream);
     }
 }

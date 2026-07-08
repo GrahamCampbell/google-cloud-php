@@ -52,8 +52,8 @@ $request = new CreateYouTubeVideoUploadRequest([
 // 1. End-user calls generated client method and receives an initialized ResumableUpload object
 $upload = $client->createYouTubeVideoUpload($request, [
     'chunkSize' => 8 * 1024 * 1024, // 8MB
-    'progressCallback' => function (int $bytesUploaded) use (&$upload) {
-        echo "Committed $bytesUploaded bytes to session: " . $upload->getUploadUrl() . "\n";
+    'progressCallback' => function (int $bytesUploaded, string $uploadUrl) {
+        echo "Committed $bytesUploaded bytes to session: $uploadUrl\n";
     }
 ]);
 
@@ -63,14 +63,14 @@ try {
     $result = $upload->startUpload($stream);
 } catch (\Exception $e) {
     // 3a. Resuming directly on the existing $upload object after an interruption in the same process:
-    // Calling `resume()` queries the server for the current byte offset and resumes transmitting remaining chunks.
-    $result = $upload->resume($stream);
+    // Calling `startUpload()` queries the server for the current byte offset and resumes transmitting remaining chunks.
+    $result = $upload->startUpload($stream);
 }
 
 // 3b. Resuming across separate processes or restarts (where the original $upload object in memory is lost):
 // The session URL obtained via `$upload->getUploadUrl()` can be persisted (e.g. in a database) and loaded later.
 $resumedUpload = $client->resumeUpload('https://upload.url/session123');
-$resumedUpload->resume($stream);
+$resumedUpload->startUpload($stream);
 ```
 
 ---
