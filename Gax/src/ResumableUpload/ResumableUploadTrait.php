@@ -32,8 +32,6 @@
 
 namespace Google\ApiCore\ResumableUpload;
 
-use Google\ApiCore\ApiException;
-use Google\ApiCore\ApiStatus;
 use Google\ApiCore\CredentialsWrapper;
 use Google\Auth\HttpHandler\HttpHandlerFactory;
 
@@ -42,7 +40,7 @@ use Google\Auth\HttpHandler\HttpHandlerFactory;
  */
 trait ResumableUploadTrait
 {
-    private ?ResumableUploadClient $resumableUploadClient = null;
+    private ResumableUploadClient $resumableUploadClient;
 
     /**
      * Resume an existing resumable upload session.
@@ -54,7 +52,7 @@ trait ResumableUploadTrait
     public function resumeUpload(string $uploadUrl, int $chunkSize = 8388608): ResumableUpload
     {
         return new ResumableUpload(
-            $this->getResumableUploadClient(),
+            $this->resumableUploadClient,
             '',
             null,
             [
@@ -62,25 +60,6 @@ trait ResumableUploadTrait
                 'chunkSize' => $chunkSize,
             ]
         );
-    }
-
-    /**
-     * Get the ResumableUploadClient for this GAPIC client.
-     *
-     * @access private
-     * @return ResumableUploadClient
-     * @throws ApiException
-     */
-    private function getResumableUploadClient(): ResumableUploadClient
-    {
-        if ($this->resumableUploadClient === null) {
-            throw new ApiException(
-                'Resumable uploads are not supported or configured on this client.',
-                0,
-                ApiStatus::UNIMPLEMENTED
-            );
-        }
-        return $this->resumableUploadClient;
     }
 
     /**

@@ -59,6 +59,6 @@ class TestTraitClient
 
     public function exposeGetResumableUploadClient(): ResumableUploadClient
     {
-        return $this->getResumableUploadClient();
+        return $this->resumableUploadClient;
     }
 }
