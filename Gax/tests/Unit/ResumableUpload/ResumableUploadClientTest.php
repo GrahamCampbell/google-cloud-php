@@ -36,7 +36,6 @@ use Google\ApiCore\ApiException;
 use Google\ApiCore\CredentialsWrapper;
 use Google\ApiCore\ResumableUpload\ResumableUpload;
 use Google\ApiCore\ResumableUpload\ResumableUploadClient;
-use Google\ApiCore\Transport\GrpcTransport;
 use Google\Protobuf\Timestamp;
 use GuzzleHttp\Psr7\Utils;
 use PHPUnit\Framework\TestCase;
@@ -49,13 +48,13 @@ class ResumableUploadClientTest extends TestCase
         $credentialsWrapper = $this->createMock(CredentialsWrapper::class);
 
         $client = new ResumableUploadClient(
-            $transport,
+            $transport->getHttpHandler(),
             $credentialsWrapper,
             serviceAddress: 'test.googleapis.com'
         );
 
         $ref = new \ReflectionClass($client);
-        $this->assertSame($transport, $ref->getProperty('transport')->getValue($client));
+        $this->assertIsCallable($ref->getProperty('httpHandler')->getValue($client));
         $this->assertSame($credentialsWrapper, $ref->getProperty('credentialsWrapper')->getValue($client));
 
         $upload = new ResumableUpload($client, 'v1/test:create', new Timestamp());
@@ -63,96 +62,5 @@ class ResumableUploadClientTest extends TestCase
 
         $uploadRef = new \ReflectionClass($upload);
         $this->assertSame($client, $uploadRef->getProperty('resumableUploadClient')->getValue($upload));
-    }
-
-    public function testWarningIssuedAndExceptionThrownIfCredentialsCannotBeFoundForGrpcTransport()
-    {
-        $transport = $this->createMock(GrpcTransport::class);
-
-        $warningTriggered = false;
-        set_error_handler(function (int $errno, string $errstr) use (&$warningTriggered) {
-            if ($errno === E_USER_WARNING && strpos($errstr, 'Unable to find or load credentials for REST transport') !== false) {
-                $warningTriggered = true;
-                return true;
-            }
-            return false;
-        });
-
-        try {
-            $client = new ResumableUploadClient(
-                $transport,
-                credentialsWrapper: null,
-                credentials: null,
-                serviceAddress: 'test.googleapis.com'
-            );
-        } finally {
-            restore_error_handler();
-        }
-
-        $this->assertTrue($warningTriggered, 'Expected PHP warning when credentials cannot be found for gRPC transport.');
-
-        $this->expectException(ApiException::class);
-        $this->expectExceptionMessage('Unable to find or load credentials for REST transport');
-        $client->startUpload(null, Utils::streamFor('hello'));
-    }
-
-    public function testExceptionThrownOnResumeUploadIfCredentialsMissing()
-    {
-        $transport = $this->createMock(GrpcTransport::class);
-
-        set_error_handler(function () { return true; });
-        try {
-            $client = new ResumableUploadClient(
-                $transport,
-                credentialsWrapper: null,
-                credentials: null,
-                serviceAddress: 'test.googleapis.com'
-            );
-        } finally {
-            restore_error_handler();
-        }
-
-        $upload = new ResumableUpload($client, '', null, ['uploadUrl' => 'https://upload.url/session123']);
-
-        $this->expectException(ApiException::class);
-        $this->expectExceptionMessage('Unable to find or load credentials for REST transport');
-        $upload->startUpload(Utils::streamFor('hello'));
-    }
-
-    public function testWarningIssuedAndExceptionThrownIfChannelCredentialsPassedForGrpcTransport()
-    {
-        if (!class_exists(\Grpc\ChannelCredentials::class)) {
-            $this->markTestSkipped('gRPC extension not available.');
-        }
-
-        $transport = $this->createMock(GrpcTransport::class);
-        $credentialsWrapper = $this->createMock(CredentialsWrapper::class);
-        $channelCredentials = \Grpc\ChannelCredentials::createSsl(null);
-
-        $warningTriggered = false;
-        set_error_handler(function (int $errno, string $errstr) use (&$warningTriggered) {
-            if ($errno === E_USER_WARNING && strpos($errstr, 'Incompatible gRPC ChannelCredentials') !== false) {
-                $warningTriggered = true;
-                return true;
-            }
-            return false;
-        });
-
-        try {
-            $client = new ResumableUploadClient(
-                $transport,
-                $credentialsWrapper,
-                credentials: $channelCredentials,
-                serviceAddress: 'test.googleapis.com'
-            );
-        } finally {
-            restore_error_handler();
-        }
-
-        $this->assertTrue($warningTriggered, 'Expected PHP warning when ChannelCredentials passed for gRPC transport.');
-
-        $this->expectException(ApiException::class);
-        $this->expectExceptionMessage('Incompatible gRPC ChannelCredentials provided for ResumableUploadClient');
-        $client->startUpload(null, Utils::streamFor('hello'));
     }
 }

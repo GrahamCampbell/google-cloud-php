@@ -44,11 +44,12 @@ class ResumableUploadTest extends TestCase
     public function testInitializationAndReflection()
     {
         $transport = new TestTransport();
-        $client = new ResumableUploadClient($transport, serviceAddress: 'test.googleapis.com');
+        $client = new ResumableUploadClient($transport->getHttpHandler(), serviceAddress: 'test.googleapis.com');
 
         $upload = new ResumableUpload($client, 'v1/test:create', new Timestamp(), [
             'chunkSize' => 1024,
-            'progressCallback' => function (int $bytes) {}
+            'progressCallback' => function (int $bytes) {
+            }
         ]);
 
         $ref = new \ReflectionClass($upload);
@@ -66,7 +67,7 @@ class ResumableUploadTest extends TestCase
             new Response(200, ['X-Goog-Upload-Status' => 'final'])
         ]);
 
-        $client = new ResumableUploadClient($transport, serviceAddress: 'test.googleapis.com');
+        $client = new ResumableUploadClient($transport->getHttpHandler(), serviceAddress: 'test.googleapis.com');
         $callbackUrl = null;
         $upload = new ResumableUpload($client, 'v1/test:create', new Timestamp(), [
             'progressCallback' => function (int $bytes, string $url) use (&$callbackUrl) {
@@ -87,7 +88,7 @@ class ResumableUploadTest extends TestCase
             new Response(200, ['X-Goog-Upload-Status' => 'final'])
         ]);
 
-        $client = new ResumableUploadClient($transport, serviceAddress: 'test.googleapis.com');
+        $client = new ResumableUploadClient($transport->getHttpHandler(), serviceAddress: 'test.googleapis.com');
         $upload = new ResumableUpload($client, 'v1/test:create', new Timestamp());
 
         $stream = Utils::streamFor('hello world');
@@ -109,7 +110,7 @@ class ResumableUploadTest extends TestCase
             new Response(200, ['X-Goog-Upload-Status' => 'final'])
         ]);
 
-        $client = new ResumableUploadClient($transport, serviceAddress: 'test.googleapis.com');
+        $client = new ResumableUploadClient($transport->getHttpHandler(), serviceAddress: 'test.googleapis.com');
         $upload = new ResumableUpload($client, '', null, ['uploadUrl' => 'https://upload.url/session123']);
         $this->assertEquals('https://upload.url/session123', $upload->getUploadUrl());
 

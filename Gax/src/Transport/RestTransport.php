@@ -73,22 +73,6 @@ class RestTransport implements TransportInterface
     }
 
     /**
-     * @return string
-     */
-    public function getBaseUri(): string
-    {
-        return $this->requestBuilder->getBaseUri();
-    }
-
-    /**
-     * @return RequestBuilder
-     */
-    public function getRequestBuilder(): RequestBuilder
-    {
-        return $this->requestBuilder;
-    }
-
-    /**
      * Builds a RestTransport.
      *
      * @param string $apiEndpoint
@@ -296,18 +280,4 @@ class RestTransport implements TransportInterface
 
         return $callOptions;
     }
-
-    /**
-     * Sends a raw PSR-7 request.
-     *
-     * @param RequestInterface $request
-     * @param array $options
-     * @return PromiseInterface
-     */
-    public function sendRequest(RequestInterface $request, array $options = [])
-    {
-        $httpHandler = $this->httpHandler;
-        return $httpHandler($request, $this->getCallOptions($options));
-    }
 }
-

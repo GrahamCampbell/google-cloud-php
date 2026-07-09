@@ -47,6 +47,13 @@ class TestTransport implements TransportInterface
         $this->responses = $responses;
     }
 
+    public function getHttpHandler(): callable
+    {
+        return function (RequestInterface $request, array $options = []) {
+            return $this->sendRequest($request, $options);
+        };
+    }
+
     public function sendRequest(RequestInterface $request, array $options = []): \GuzzleHttp\Promise\PromiseInterface
     {
         $this->requests[] = $request;
@@ -66,8 +73,16 @@ class TestTransport implements TransportInterface
         return 'https://test.googleapis.com';
     }
 
-    public function startBidiStreamingCall(Call $call, array $options) {}
-    public function startClientStreamingCall(Call $call, array $options) {}
-    public function startServerStreamingCall(Call $call, array $options) {}
-    public function startUnaryCall(Call $call, array $options) {}
+    public function startBidiStreamingCall(Call $call, array $options)
+    {
+    }
+    public function startClientStreamingCall(Call $call, array $options)
+    {
+    }
+    public function startServerStreamingCall(Call $call, array $options)
+    {
+    }
+    public function startUnaryCall(Call $call, array $options)
+    {
+    }
 }

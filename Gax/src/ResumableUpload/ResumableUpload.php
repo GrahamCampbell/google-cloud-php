@@ -90,6 +90,12 @@ class ResumableUpload
         if ($this->uploadUrl !== null) {
             $this->options['uploadUrl'] = $this->uploadUrl;
         }
-        return $this->resumableUploadClient->startUpload($this, $dataStream, $this->restPath, $this->requestMessage, $this->options);
+        return $this->resumableUploadClient->startUpload(
+            $this,
+            $dataStream,
+            $this->restPath,
+            $this->requestMessage,
+            $this->options
+        );
     }
 }

@@ -70,14 +70,6 @@ class GrpcFallbackTransport implements TransportInterface
     }
 
     /**
-     * @return string
-     */
-    public function getBaseUri(): string
-    {
-        return $this->baseUri;
-    }
-
-    /**
      * Builds a GrpcFallbackTransport.
      *
      * @param string $apiEndpoint
@@ -228,18 +220,4 @@ class GrpcFallbackTransport implements TransportInterface
             return $ex;
         }
     }
-
-    /**
-     * Sends a raw PSR-7 request.
-     *
-     * @param RequestInterface $request
-     * @param array $options
-     * @return \GuzzleHttp\Promise\PromiseInterface
-     */
-    public function sendRequest(RequestInterface $request, array $options = [])
-    {
-        $httpHandler = $this->httpHandler;
-        return $httpHandler($request, $this->getCallOptions($options));
-    }
 }
-

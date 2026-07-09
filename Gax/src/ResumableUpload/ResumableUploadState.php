@@ -30,34 +30,50 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-namespace Google\ApiCore\Tests\Unit\ResumableUpload;
+namespace Google\ApiCore\ResumableUpload;
 
-use Google\ApiCore\CredentialsWrapper;
-use Google\ApiCore\ResumableUpload\ResumableUploadTrait;
-use Google\ApiCore\ResumableUpload\ResumableUpload;
-use Google\ApiCore\ResumableUpload\ResumableUploadClient;
-use PHPUnit\Framework\TestCase;
-
-class ResumableUploadTraitTest extends TestCase
+/**
+ * State container for an active resumable upload session.
+ *
+ * @internal
+ */
+class ResumableUploadState
 {
-    public function testTraitClientCreationAndResumeUpload()
-    {
-        $transport = new TestTransport();
-        $credentialsWrapper = $this->createMock(CredentialsWrapper::class);
+    public int $chunkSize;
+    /** @var callable|null */
+    public $progressCallback;
+    public array $headers;
+    public ?string $uploadUrl;
 
-        $client = new TestTraitClient($transport, $credentialsWrapper);
+    public string $phase;
+    public string $previousPhase;
+    public int $committedOffset = 0;
+    public int $chunkGranularity = 1;
+    public int $recoveryAttempts = 0;
+    public int $lastRecoveryOffset = -1;
+    public ?string $buffer = null;
+    public bool $isEof = false;
 
-        $uploadClient = $client->exposeGetResumableUploadClient();
-        $this->assertInstanceOf(ResumableUploadClient::class, $uploadClient);
-        $clientRef = new \ReflectionClass($uploadClient);
-        $this->assertIsCallable($clientRef->getProperty('httpHandler')->getValue($uploadClient));
-        $this->assertSame($credentialsWrapper, $clientRef->getProperty('credentialsWrapper')->getValue($uploadClient));
+    /**
+     * @param int $chunkSize
+     * @param callable|null $progressCallback
+     * @param array $headers
+     * @param ?string $uploadUrl
+     * @param string $initialPhase
+     */
+    public function __construct(
+        int $chunkSize,
+        $progressCallback,
+        array $headers,
+        ?string $uploadUrl,
+        string $initialPhase
+    ) {
+        $this->chunkSize = $chunkSize;
+        $this->progressCallback = $progressCallback;
+        $this->headers = $headers;
+        $this->uploadUrl = $uploadUrl;
 
-        $resumed = $client->resumeUpload('https://upload.url/session123', 1024);
-        $this->assertInstanceOf(ResumableUpload::class, $resumed);
-
-        $ref = new \ReflectionClass($resumed);
-        $clientProp = $ref->getProperty('resumableUploadClient');
-        $this->assertSame($client->exposeGetResumableUploadClient(), $clientProp->getValue($resumed));
+        $this->phase = $initialPhase;
+        $this->previousPhase = $initialPhase;
     }
 }

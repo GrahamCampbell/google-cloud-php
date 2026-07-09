@@ -35,6 +35,7 @@ namespace Google\ApiCore\ResumableUpload;
 use Google\ApiCore\ApiException;
 use Google\ApiCore\ApiStatus;
 use Google\ApiCore\CredentialsWrapper;
+use Google\Auth\HttpHandler\HttpHandlerFactory;
 
 /**
  * Trait for GAPIC clients that support resumable uploads.
@@ -52,7 +53,15 @@ trait ResumableUploadTrait
      */
     public function resumeUpload(string $uploadUrl, int $chunkSize = 8388608): ResumableUpload
     {
-        return new ResumableUpload($this->getResumableUploadClient(), '', null, ['uploadUrl' => $uploadUrl, 'chunkSize' => $chunkSize]);
+        return new ResumableUpload(
+            $this->getResumableUploadClient(),
+            '',
+            null,
+            [
+                'uploadUrl' => $uploadUrl,
+                'chunkSize' => $chunkSize,
+            ]
+        );
     }
 
     /**
@@ -62,10 +71,14 @@ trait ResumableUploadTrait
      * @return ResumableUploadClient
      * @throws ApiException
      */
-    protected function getResumableUploadClient(): ResumableUploadClient
+    private function getResumableUploadClient(): ResumableUploadClient
     {
         if ($this->resumableUploadClient === null) {
-            throw new ApiException('Resumable uploads are not supported or configured on this client.', 0, ApiStatus::UNIMPLEMENTED);
+            throw new ApiException(
+                'Resumable uploads are not supported or configured on this client.',
+                0,
+                ApiStatus::UNIMPLEMENTED
+            );
         }
         return $this->resumableUploadClient;
     }
@@ -82,11 +95,23 @@ trait ResumableUploadTrait
             ? $this->credentialsWrapper
             : null;
 
+        $httpHandler = null;
+        if (isset($options['httpHandler']) && is_callable($options['httpHandler'])) {
+            $httpHandler = $options['httpHandler'];
+        } elseif (isset($options['transportConfig']['rest']['httpHandler'])
+            && is_callable($options['transportConfig']['rest']['httpHandler'])
+        ) {
+            $httpHandler = $options['transportConfig']['rest']['httpHandler'];
+        }
+
+        if ($httpHandler === null) {
+            $logger = $options['transportConfig']['rest']['logger'] ?? null;
+            $httpHandler = [HttpHandlerFactory::build(logger: $logger), 'async'];
+        }
+
         return new ResumableUploadClient(
-            $this->transport,
+            $httpHandler,
             $credentialsWrapper,
-            $options['credentials'] ?? null,
-            $options['transportConfig'] ?? [],
             $this->agentHeader,
             $this->apiEndpoint,
             $options['uploadPrefix'] ?? '/resumable/upload'

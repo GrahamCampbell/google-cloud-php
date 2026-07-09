@@ -49,22 +49,10 @@ class MockTransport implements TransportInterface
     use MockStubTrait;
 
     private $agentHeaderDescriptor; // @phpstan-ignore-line
-    private string $baseUri = 'https://example.com';
-
-    public function __construct($deserialize = null, string $baseUri = 'https://example.com')
-    {
-        $this->deserialize = $deserialize;
-        $this->baseUri = $baseUri;
-    }
 
     public function setAgentHeaderDescriptor($agentHeaderDescriptor)
     {
         $this->agentHeaderDescriptor = $agentHeaderDescriptor;
-    }
-
-    public function getBaseUri(): string
-    {
-        return $this->baseUri;
     }
 
     public function startUnaryCall(Call $call, array $options)
@@ -123,13 +111,4 @@ class MockTransport implements TransportInterface
     {
         // does nothing
     }
-
-    public function sendRequest(\Psr\Http\Message\RequestInterface $request, array $options = [])
-    {
-        $promise = new Promise(function () use (&$promise, $request) {
-            $promise->resolve(new \GuzzleHttp\Psr7\Response(200, ['X-Goog-Upload-Status' => 'active'], ''));
-        });
-        return $promise;
-    }
 }
-
