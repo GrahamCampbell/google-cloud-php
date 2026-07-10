@@ -36,9 +36,11 @@ use Exception;
 use Google\ApiCore\ApiException;
 use Google\ApiCore\ApiStatus;
 use Google\ApiCore\CredentialsWrapper;
+use Google\ApiCore\RequestBuilder;
 use Google\Protobuf\Internal\Message;
 use GuzzleHttp\Exception\RequestException;
 use GuzzleHttp\Psr7\Request;
+use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\StreamInterface;
 
@@ -54,7 +56,6 @@ class ResumableUploadClient
     private const PHASE_FINALIZING = 'FINALIZING';
     private const PHASE_RECOVERY = 'RECOVERY';
     private const PHASE_DONE = 'DONE';
-    private const METHOD_POST = 'POST';
     private const DEFAULT_CHUNK_SIZE = 8388608;
     private const MAX_RECOVERY_ATTEMPTS = 3;
 
@@ -64,8 +65,10 @@ class ResumableUploadClient
     private array $agentHeader = [];
     private string $serviceAddress = '';
     private string $uploadPrefix = '/resumable/upload';
+    private RequestBuilder $requestBuilder;
 
     /**
+     * @param RequestBuilder $requestBuilder RequestBuilder for rendering REST URI templates and wildcards.
      * @param callable $httpHandler Handler used to deliver PSR-7 requests.
      * @param ?CredentialsWrapper $credentialsWrapper The credentials wrapper from GAPIC client.
      * @param array $agentHeader Agent header array.
@@ -73,12 +76,14 @@ class ResumableUploadClient
      * @param string $uploadPrefix Resumable upload path prefix (default: '/resumable/upload').
      */
     public function __construct(
+        RequestBuilder $requestBuilder,
         callable $httpHandler,
         ?CredentialsWrapper $credentialsWrapper = null,
         array $agentHeader = [],
         string $serviceAddress = '',
         string $uploadPrefix = '/resumable/upload'
     ) {
+        $this->requestBuilder = $requestBuilder;
         $this->httpHandler = $httpHandler;
         $this->credentialsWrapper = $credentialsWrapper;
         $this->agentHeader = $agentHeader;
@@ -91,7 +96,7 @@ class ResumableUploadClient
      *
      * @param ResumableUpload $upload
      * @param StreamInterface $dataStream
-     * @param string $restPath
+     * @param string $method
      * @param ?Message $requestMessage
      * @param array $options
      * @return bool
@@ -100,7 +105,7 @@ class ResumableUploadClient
     public function startUpload(
         ResumableUpload $upload,
         StreamInterface $dataStream,
-        string $restPath = '',
+        string $method = '',
         ?Message $requestMessage = null,
         array $options = []
     ): bool {
@@ -119,7 +124,7 @@ class ResumableUploadClient
                     $state,
                     $upload,
                     $dataStream,
-                    $restPath,
+                    $method,
                     $requestMessage
                 ),
                 self::PHASE_TRANSMITTING => $this->phaseTransmitting($state, $dataStream),
@@ -136,42 +141,40 @@ class ResumableUploadClient
         ResumableUploadState $state,
         ResumableUpload $upload,
         StreamInterface $dataStream,
-        string $restPath,
+        string $method,
         ?Message $requestMessage
     ): string {
-        $baseUri = $this->serviceAddress;
-        if (!str_starts_with($baseUri, 'http://') && !str_starts_with($baseUri, 'https://')) {
-            $baseUri = 'https://' . $baseUri;
-        }
-        $pathSegments = array_filter(
-            [ltrim($this->uploadPrefix, '/'), ltrim($restPath, '/')],
-            fn($s) => $s !== ''
-        );
-        $url = rtrim($baseUri, '/') . '/' . implode('/', $pathSegments);
         $headers = $state->headers;
         $headers['X-Goog-Upload-Protocol'] = 'resumable';
         $headers['X-Goog-Upload-Command'] = 'start';
         if ($dataStream->getSize() !== null) {
             $headers['X-Goog-Upload-Header-Content-Length'] = (string) $dataStream->getSize();
         }
-        $body = $requestMessage ? $requestMessage->serializeToJsonString() : '';
+
+        $requestMessage = $requestMessage ?: new \Google\Protobuf\Internal\GPBEmpty();
+        $request = $this->requestBuilder->build($method, $requestMessage, $headers);
+        if ($this->uploadPrefix !== '' && $this->uploadPrefix !== '/') {
+            $uri = $request->getUri();
+            $path = $uri->getPath();
+            $newPath = rtrim($this->uploadPrefix, '/') . ($path === '' || $path === '/' ? '' : '/' . ltrim($path, '/'));
+            $request = $request->withUri($uri->withPath($newPath));
+        }
 
         try {
-            $response = $this->sendHttpRequest(self::METHOD_POST, $url, $headers, $body);
+            $response = $this->sendRequest($request);
             $statusCode = $response->getStatusCode();
             if ($statusCode !== 200) {
                 $this->handleErrorResponse($response);
             }
-            $urlHeader = $this->getHeaderCaseInsensitive($response->getHeaders(), 'X-Goog-Upload-URL');
-            $state->uploadUrl = $urlHeader ?? $state->uploadUrl;
+            $urlHeader = $response->getHeaderLine('X-Goog-Upload-URL');
+            if (!empty($urlHeader)) {
+                $state->uploadUrl = $urlHeader;
+            }
             if ($state->uploadUrl !== null) {
                 $upload->setUploadUrl($state->uploadUrl);
             }
-            $granularityHeader = $this->getHeaderCaseInsensitive(
-                $response->getHeaders(),
-                'X-Goog-Upload-Chunk-Granularity'
-            );
-            $state->chunkGranularity = (int) ($granularityHeader ?? 1);
+            $granularityHeader = $response->getHeaderLine('X-Goog-Upload-Chunk-Granularity');
+            $state->chunkGranularity = !empty($granularityHeader) ? (int) $granularityHeader : 1;
             return self::PHASE_TRANSMITTING;
         } catch (Exception $e) {
             return $this->handleException(
@@ -241,7 +244,9 @@ class ResumableUploadClient
         }
 
         try {
-            $response = $this->sendHttpRequest(self::METHOD_POST, (string) $state->uploadUrl, $headers, $body);
+            $response = $this->sendRequest(
+                new Request('POST', (string) $state->uploadUrl, $headers, $body)
+            );
             $statusCode = $response->getStatusCode();
             if ($statusCode === 200) {
                 if ($state->progressCallback && $headers['X-Goog-Upload-Command'] !== 'finalize') {
@@ -251,8 +256,8 @@ class ResumableUploadClient
                     );
                 }
 
-                $statusHeader = $this->getHeaderCaseInsensitive($response->getHeaders(), 'X-Goog-Upload-Status');
-                if (strcasecmp((string) $statusHeader, 'final') === 0) {
+                $statusHeader = $response->getHeaderLine('X-Goog-Upload-Status');
+                if ($statusHeader === 'final') {
                     return self::PHASE_DONE;
                 }
                 $state->committedOffset += strlen((string) $state->buffer);
@@ -278,14 +283,15 @@ class ResumableUploadClient
     {
         $headers = ['X-Goog-Upload-Command' => 'query'];
         try {
-            $response = $this->sendHttpRequest(self::METHOD_POST, (string) $state->uploadUrl, $headers, '');
+            $response = $this->sendRequest(
+                new Request('POST', (string) $state->uploadUrl, $headers, '')
+            );
             $statusCode = $response->getStatusCode();
             if ($statusCode === 200) {
-                $serverOffsetStr = $this->getHeaderCaseInsensitive(
-                    $response->getHeaders(),
-                    'X-Goog-Upload-Size-Received'
-                );
-                $serverOffset = $serverOffsetStr !== null ? (int) $serverOffsetStr : $state->committedOffset;
+                $serverOffsetStr = $response->getHeaderLine('X-Goog-Upload-Size-Received');
+                $serverOffset = !empty($serverOffsetStr) || $serverOffsetStr === '0'
+                    ? (int) $serverOffsetStr
+                    : $state->committedOffset;
 
                 if ($serverOffset === $state->lastRecoveryOffset) {
                     $state->recoveryAttempts++;
@@ -321,18 +327,15 @@ class ResumableUploadClient
         return self::PHASE_RECOVERY;
     }
 
-    private function sendHttpRequest(
-        string $method,
-        string $url,
-        array $headers,
-        $body
-    ): ResponseInterface {
-        $reqHeaders = array_merge($this->agentHeader, $headers);
+    private function sendRequest(RequestInterface $request): ResponseInterface
+    {
+        $reqHeaders = array_merge($this->agentHeader, $request->getHeaders());
         if ($this->credentialsWrapper) {
             $reqHeaders = $this->credentialsWrapper->addCredentialsToRequestHeaders($reqHeaders);
         }
-
-        $request = new Request($method, $url, $reqHeaders, $body);
+        foreach ($reqHeaders as $k => $v) {
+            $request = $request->withHeader($k, $v);
+        }
 
         $httpHandler = $this->httpHandler;
         $response = $httpHandler($request);
@@ -340,16 +343,6 @@ class ResumableUploadClient
             $response = $response->wait();
         }
         return $response;
-    }
-
-    private function getHeaderCaseInsensitive(array $headers, string $key): ?string
-    {
-        foreach ($headers as $k => $v) {
-            if (strcasecmp((string) $k, $key) === 0) {
-                return is_array($v) ? (string) reset($v) : (string) $v;
-            }
-        }
-        return null;
     }
 
     private function handleException(
@@ -389,11 +382,10 @@ class ResumableUploadClient
     private function handleErrorResponse(ResponseInterface $response)
     {
         $statusCode = $response->getStatusCode();
-        $headers = $response->getHeaders();
         $body = (string) $response->getBody();
 
-        $statusHeader = $this->getHeaderCaseInsensitive($headers, 'X-Goog-Upload-Status');
-        if (strcasecmp((string) $statusHeader, 'final') === 0) {
+        $statusHeader = $response->getHeaderLine('X-Goog-Upload-Status');
+        if ($statusHeader === 'final') {
             throw new ApiException(
                 $body ?: 'Upload rejected by server',
                 $statusCode,
@@ -403,7 +395,7 @@ class ResumableUploadClient
 
         throw new RequestException(
             "HTTP error {$statusCode}",
-            new Request(self::METHOD_POST, ''),
+            new Request('POST', ''),
             $response
         );
     }

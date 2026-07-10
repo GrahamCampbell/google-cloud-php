@@ -45,7 +45,7 @@ class ResumableUpload
 
     public function __construct(
         private ResumableUploadClient $resumableUploadClient,
-        private string $restPath = '',
+        private string $method = '',
         private ?Message $requestMessage = null,
         private array $options = []
     ) {
@@ -93,7 +93,7 @@ class ResumableUpload
         return $this->resumableUploadClient->startUpload(
             $this,
             $dataStream,
-            $this->restPath,
+            $this->method,
             $this->requestMessage,
             $this->options
         );

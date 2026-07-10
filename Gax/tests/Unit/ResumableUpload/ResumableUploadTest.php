@@ -35,6 +35,7 @@ namespace Google\ApiCore\Tests\Unit\ResumableUpload;
 use Google\ApiCore\ResumableUpload\ResumableUpload;
 use Google\ApiCore\ResumableUpload\ResumableUploadClient;
 use Google\Protobuf\Timestamp;
+use GuzzleHttp\Promise\Create;
 use GuzzleHttp\Psr7\Response;
 use GuzzleHttp\Psr7\Utils;
 use PHPUnit\Framework\TestCase;
@@ -43,8 +44,10 @@ class ResumableUploadTest extends TestCase
 {
     public function testInitializationAndReflection()
     {
-        $transport = new TestTransport();
-        $client = new ResumableUploadClient($transport->getHttpHandler(), serviceAddress: 'test.googleapis.com');
+        $httpHandler = function () {
+        };
+        $requestBuilder = $this->createMock(\Google\ApiCore\RequestBuilder::class);
+        $client = new ResumableUploadClient($requestBuilder, $httpHandler, serviceAddress: 'test.googleapis.com');
 
         $upload = new ResumableUpload($client, 'v1/test:create', new Timestamp(), [
             'chunkSize' => 1024,
@@ -56,18 +59,22 @@ class ResumableUploadTest extends TestCase
         $clientProp = $ref->getProperty('resumableUploadClient');
         $this->assertSame($client, $clientProp->getValue($upload));
 
-        $pathProp = $ref->getProperty('restPath');
+        $pathProp = $ref->getProperty('method');
         $this->assertSame('v1/test:create', $pathProp->getValue($upload));
     }
 
     public function testProgressCallbackReceivesUploadUrl()
     {
-        $transport = new TestTransport([
+        $httpHandler = $this->createMockHttpHandler([
             new Response(200, ['X-Goog-Upload-Status' => 'active', 'X-Goog-Upload-URL' => 'https://upload.url/123']),
             new Response(200, ['X-Goog-Upload-Status' => 'final'])
         ]);
 
-        $client = new ResumableUploadClient($transport->getHttpHandler(), serviceAddress: 'test.googleapis.com');
+        $requestBuilder = $this->createMock(\Google\ApiCore\RequestBuilder::class);
+        $requestBuilder->method('build')->willReturnCallback(function ($path, $message, $headers = []) {
+            return new \GuzzleHttp\Psr7\Request('POST', 'https://test.googleapis.com/' . $path, $headers);
+        });
+        $client = new ResumableUploadClient($requestBuilder, $httpHandler, serviceAddress: 'test.googleapis.com');
         $callbackUrl = null;
         $upload = new ResumableUpload($client, 'v1/test:create', new Timestamp(), [
             'progressCallback' => function (int $bytes, string $url) use (&$callbackUrl) {
@@ -83,34 +90,41 @@ class ResumableUploadTest extends TestCase
 
     public function testStartUploadDelegation()
     {
-        $transport = new TestTransport([
+        $requests = [];
+        $httpHandler = $this->createMockHttpHandler([
             new Response(200, ['X-Goog-Upload-Status' => 'active', 'X-Goog-Upload-URL' => 'https://upload.url/123']),
             new Response(200, ['X-Goog-Upload-Status' => 'final'])
-        ]);
+        ], $requests);
 
-        $client = new ResumableUploadClient($transport->getHttpHandler(), serviceAddress: 'test.googleapis.com');
+        $requestBuilder = $this->createMock(\Google\ApiCore\RequestBuilder::class);
+        $requestBuilder->method('build')->willReturnCallback(function ($path, $message, $headers = []) {
+            return new \GuzzleHttp\Psr7\Request('POST', 'https://test.googleapis.com/' . $path, $headers);
+        });
+        $client = new ResumableUploadClient($requestBuilder, $httpHandler, serviceAddress: 'test.googleapis.com');
         $upload = new ResumableUpload($client, 'v1/test:create', new Timestamp());
 
         $stream = Utils::streamFor('hello world');
         $result = $upload->startUpload($stream);
 
         $this->assertTrue($result);
-        $this->assertCount(2, $transport->requests);
-        $this->assertEquals('POST', $transport->requests[0]->getMethod());
-        $this->assertEquals('start', $transport->requests[0]->getHeaderLine('X-Goog-Upload-Command'));
-        $this->assertEquals('upload, finalize', $transport->requests[1]->getHeaderLine('X-Goog-Upload-Command'));
-        $this->assertEquals('hello world', (string) $transport->requests[1]->getBody());
+        $this->assertCount(2, $requests);
+        $this->assertEquals('POST', $requests[0]->getMethod());
+        $this->assertEquals('start', $requests[0]->getHeaderLine('X-Goog-Upload-Command'));
+        $this->assertEquals('upload, finalize', $requests[1]->getHeaderLine('X-Goog-Upload-Command'));
+        $this->assertEquals('hello world', (string) $requests[1]->getBody());
         $this->assertEquals('https://upload.url/123', $upload->getUploadUrl());
     }
 
     public function testUploadUrlTrackingAndResume()
     {
-        $transport = new TestTransport([
+        $requests = [];
+        $httpHandler = $this->createMockHttpHandler([
             new Response(200, ['X-Goog-Upload-Status' => 'active', 'X-Goog-Upload-Size-Received' => '5']),
             new Response(200, ['X-Goog-Upload-Status' => 'final'])
-        ]);
+        ], $requests);
 
-        $client = new ResumableUploadClient($transport->getHttpHandler(), serviceAddress: 'test.googleapis.com');
+        $requestBuilder = $this->createMock(\Google\ApiCore\RequestBuilder::class);
+        $client = new ResumableUploadClient($requestBuilder, $httpHandler, serviceAddress: 'test.googleapis.com');
         $upload = new ResumableUpload($client, '', null, ['uploadUrl' => 'https://upload.url/session123']);
         $this->assertEquals('https://upload.url/session123', $upload->getUploadUrl());
 
@@ -118,9 +132,21 @@ class ResumableUploadTest extends TestCase
         $result = $upload->startUpload($stream);
 
         $this->assertTrue($result);
-        $this->assertCount(2, $transport->requests);
-        $this->assertEquals('query', $transport->requests[0]->getHeaderLine('X-Goog-Upload-Command'));
-        $this->assertEquals('upload, finalize', $transport->requests[1]->getHeaderLine('X-Goog-Upload-Command'));
-        $this->assertEquals(' world', (string) $transport->requests[1]->getBody());
+        $this->assertCount(2, $requests);
+        $this->assertEquals('query', $requests[0]->getHeaderLine('X-Goog-Upload-Command'));
+        $this->assertEquals('upload, finalize', $requests[1]->getHeaderLine('X-Goog-Upload-Command'));
+        $this->assertEquals(' world', (string) $requests[1]->getBody());
+    }
+
+    private function createMockHttpHandler(array $responses, ?array &$requests = []): callable
+    {
+        return function ($request, $options = []) use (&$responses, &$requests) {
+            $requests[] = $request;
+            $response = array_shift($responses);
+            if ($response instanceof \Exception) {
+                return Create::rejectionFor($response);
+            }
+            return Create::promiseFor($response);
+        };
     }
 }

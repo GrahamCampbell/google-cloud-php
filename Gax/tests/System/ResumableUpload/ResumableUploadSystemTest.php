@@ -15,22 +15,20 @@
  * limitations under the License.
  */
 
-namespace Google\ApiCore\Tests\Integration\ResumableUpload;
+namespace Google\ApiCore\Tests\System\ResumableUpload;
 
-use Google\ApiCore\InsecureRequestBuilder;
 use Google\ApiCore\ResumableUpload\ResumableUpload;
 use Google\ApiCore\ResumableUpload\ResumableUploadClient;
-use Google\ApiCore\Transport\RestTransport;
 use Google\Auth\HttpHandler\HttpHandlerFactory;
 use Google\Protobuf\Timestamp;
 use GuzzleHttp\Psr7\Utils;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Integration tests validating ResumableUploadClient and ResumableUpload protocol implementation
+ * System tests validating ResumableUploadClient and ResumableUpload protocol implementation
  * against a locally running python scotty-uup-service instance.
  */
-class ResumableUploadIntegrationTest extends TestCase
+class ResumableUploadSystemTest extends TestCase
 {
     private array $runningServers = [];
 
@@ -60,7 +58,9 @@ class ResumableUploadIntegrationTest extends TestCase
     {
         $scottyDir = realpath(__DIR__ . '/../../../../../scotty-uup-service');
         if (!$scottyDir || !is_dir($scottyDir)) {
-            $this->markTestSkipped('scotty-uup-service repository not found at ' . __DIR__ . '/../../../../../scotty-uup-service.');
+            $this->markTestSkipped(
+                'scotty-uup-service repo not found at ' . __DIR__ . '/../../../../../scotty-uup-service.'
+            );
         }
 
         exec('which uv 2>/dev/null', $out, $ret);
@@ -118,14 +118,15 @@ class ResumableUploadIntegrationTest extends TestCase
     private function createClientAndUpload(array $serverInfo, string $data, ?callable $progressCallback = null): bool
     {
         $port = $serverInfo['port'];
-        $dummyConfigPath = $serverInfo['dummyConfigPath'];
-
-        $requestBuilder = new InsecureRequestBuilder("127.0.0.1:$port", $dummyConfigPath);
         $httpHandler = HttpHandlerFactory::build();
-        $transport = new RestTransport($requestBuilder, [$httpHandler, 'async']);
-
+        $requestBuilder = $this->createMock(\Google\ApiCore\RequestBuilder::class);
+        $requestBuilder->method('build')->willReturnCallback(function ($path, $message, $headers = []) use ($port) {
+            $body = $message ? $message->serializeToJsonString() : '';
+            return new \GuzzleHttp\Psr7\Request('POST', "http://127.0.0.1:$port", $headers, $body);
+        });
         $client = new ResumableUploadClient(
-            $transport,
+            $requestBuilder,
+            [$httpHandler, 'async'],
             serviceAddress: "http://127.0.0.1:$port",
             uploadPrefix: '/upload'
         );
@@ -174,7 +175,11 @@ class ResumableUploadIntegrationTest extends TestCase
         $lines = file($logFiles[0], FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
         $events = array_map(fn($line) => json_decode($line, true), $lines);
 
-        $startReqs = array_filter($events, fn($e) => ($e['event_type'] ?? '') === 'request_received' && ($e['headers']['X-Goog-Upload-Command'] ?? '') === 'start');
+        $startReqs = array_filter(
+            $events,
+            fn($e) => ($e['event_type'] ?? '') === 'request_received'
+                && ($e['headers']['X-Goog-Upload-Command'] ?? '') === 'start'
+        );
         $this->assertNotEmpty($startReqs, 'Expected start command in scotty audit logs.');
         $startReq = reset($startReqs);
         $this->assertEquals('resumable', $startReq['headers']['X-Goog-Upload-Protocol'] ?? '');
@@ -199,7 +204,10 @@ class ResumableUploadIntegrationTest extends TestCase
         $lines = file($logFiles[0], FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
         $events = array_map(fn($line) => json_decode($line, true), $lines);
 
-        $injections = array_filter($events, fn($e) => ($e['event_type'] ?? '') === 'scenario_action' && ($e['action'] ?? '') === 'inject_error');
+        $injections = array_filter(
+            $events,
+            fn($e) => ($e['event_type'] ?? '') === 'scenario_action' && ($e['action'] ?? '') === 'inject_error'
+        );
         $this->assertCount(2, $injections, 'Expected exactly 2 injected errors during start.');
     }
 
@@ -223,7 +231,10 @@ class ResumableUploadIntegrationTest extends TestCase
         $lines = file($logFiles[0], FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
         $events = array_map(fn($line) => json_decode($line, true), $lines);
 
-        $injections = array_filter($events, fn($e) => ($e['event_type'] ?? '') === 'scenario_action' && ($e['action'] ?? '') === 'inject_error');
+        $injections = array_filter(
+            $events,
+            fn($e) => ($e['event_type'] ?? '') === 'scenario_action' && ($e['action'] ?? '') === 'inject_error'
+        );
         $this->assertCount(2, $injections, 'Expected exactly 2 injected errors during chunk upload.');
     }
 }

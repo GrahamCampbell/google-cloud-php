@@ -33,21 +33,40 @@
 namespace Google\ApiCore\Tests\Unit\ResumableUpload;
 
 use Google\ApiCore\CredentialsWrapper;
-use Google\ApiCore\ResumableUpload\ResumableUploadTrait;
 use Google\ApiCore\ResumableUpload\ResumableUpload;
 use Google\ApiCore\ResumableUpload\ResumableUploadClient;
+use Google\ApiCore\ResumableUpload\ResumableUploadTrait;
 use PHPUnit\Framework\TestCase;
 
 class ResumableUploadTraitTest extends TestCase
 {
     public function testTraitClientCreationAndResumeUpload()
     {
-        $transport = new TestTransport();
+        $httpHandler = function () {
+        };
         $credentialsWrapper = $this->createMock(CredentialsWrapper::class);
 
-        $client = new TestTraitClient($transport, $credentialsWrapper);
+        $client = new class ($credentialsWrapper, ['httpHandler' => $httpHandler]) {
+            use ResumableUploadTrait;
 
-        $uploadClient = $client->exposeGetResumableUploadClient();
+            public ?CredentialsWrapper $credentialsWrapper;
+            public array $agentHeader = [];
+
+            public function __construct(?CredentialsWrapper $credentialsWrapper, array $options)
+            {
+                $this->credentialsWrapper = $credentialsWrapper;
+                $options['transportConfig']['rest']['restClientConfigPath'] = __DIR__
+                    . '/../testdata/resources/test_service_rest_client_config.php';
+                $this->resumableUploadClient = $this->createResumableUploadClient($options);
+            }
+
+            public function getResumableUploadClient(): ResumableUploadClient
+            {
+                return $this->resumableUploadClient;
+            }
+        };
+
+        $uploadClient = $client->getResumableUploadClient();
         $this->assertInstanceOf(ResumableUploadClient::class, $uploadClient);
         $clientRef = new \ReflectionClass($uploadClient);
         $this->assertIsCallable($clientRef->getProperty('httpHandler')->getValue($uploadClient));
@@ -58,6 +77,6 @@ class ResumableUploadTraitTest extends TestCase
 
         $ref = new \ReflectionClass($resumed);
         $clientProp = $ref->getProperty('resumableUploadClient');
-        $this->assertSame($client->exposeGetResumableUploadClient(), $clientProp->getValue($resumed));
+        $this->assertSame($client->getResumableUploadClient(), $clientProp->getValue($resumed));
     }
 }

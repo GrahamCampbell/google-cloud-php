@@ -42,18 +42,21 @@ use PHPUnit\Framework\TestCase;
 
 class ResumableUploadClientTest extends TestCase
 {
-    public function testIncludesRestTransportIfAlreadyUsed()
+    public function testClientCreationAndInitialization()
     {
-        $transport = new TestTransport();
+        $httpHandler = function () {
+        };
         $credentialsWrapper = $this->createMock(CredentialsWrapper::class);
-
+        $requestBuilder = $this->createMock(\Google\ApiCore\RequestBuilder::class);
         $client = new ResumableUploadClient(
-            $transport->getHttpHandler(),
+            $requestBuilder,
+            $httpHandler,
             $credentialsWrapper,
             serviceAddress: 'test.googleapis.com'
         );
 
         $ref = new \ReflectionClass($client);
+        $this->assertSame($requestBuilder, $ref->getProperty('requestBuilder')->getValue($client));
         $this->assertIsCallable($ref->getProperty('httpHandler')->getValue($client));
         $this->assertSame($credentialsWrapper, $ref->getProperty('credentialsWrapper')->getValue($client));
 
@@ -62,5 +65,54 @@ class ResumableUploadClientTest extends TestCase
 
         $uploadRef = new \ReflectionClass($upload);
         $this->assertSame($client, $uploadRef->getProperty('resumableUploadClient')->getValue($upload));
+    }
+
+    public function testStartUploadRendersWildcardsUsingRequestBuilder()
+    {
+        $requests = [];
+        $httpHandler = function ($request, $options = []) use (&$requests) {
+            $requests[] = $request;
+            if (count($requests) === 1) {
+                return \GuzzleHttp\Promise\Create::promiseFor(new \GuzzleHttp\Psr7\Response(200, [
+                    'X-Goog-Upload-Status' => 'active',
+                    'X-Goog-Upload-URL' => 'https://upload.url/123'
+                ]));
+            }
+            return \GuzzleHttp\Promise\Create::promiseFor(new \GuzzleHttp\Psr7\Response(200, [
+                'X-Goog-Upload-Status' => 'final'
+            ]));
+        };
+
+        $requestBuilder = $this->createMock(\Google\ApiCore\RequestBuilder::class);
+        $message = new Timestamp();
+        $requestBuilder->expects($this->once())
+            ->method('build')
+            ->willReturn(new \GuzzleHttp\Psr7\Request(
+                'POST',
+                'https://test.googleapis.com/v24/customers/12345/youTubeVideoUploads:create'
+            ));
+
+        $client = new ResumableUploadClient(
+            $requestBuilder,
+            $httpHandler,
+            null,
+            [],
+            'test.googleapis.com',
+            '/resumable/upload'
+        );
+
+        $upload = new ResumableUpload(
+            $client,
+            'Google.Cloud.Example.V1.ExampleService/CreateYouTubeVideoUpload',
+            $message
+        );
+        $stream = Utils::streamFor('hello');
+        $upload->startUpload($stream);
+
+        $this->assertCount(2, $requests);
+        $this->assertSame(
+            'https://test.googleapis.com/resumable/upload/v24/customers/12345/youTubeVideoUploads:create',
+            (string) $requests[0]->getUri()
+        );
     }
 }

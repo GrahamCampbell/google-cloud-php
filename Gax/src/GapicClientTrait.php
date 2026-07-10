@@ -84,7 +84,6 @@ trait GapicClientTrait
         Call::SERVER_STREAMING_CALL => 'startServerStreamingCall',
     ];
     private bool $backwardsCompatibilityMode;
-    private string $apiEndpoint = '';
 
     /**
      * Add a middleware to the call stack by providing a callable which will be
@@ -299,7 +298,6 @@ trait GapicClientTrait
             $options = new ClientOptions($options);
         }
         $this->serviceName = $options['serviceName'];
-        $this->apiEndpoint = $options['apiEndpoint'] ?? '';
         $this->retrySettings = RetrySettings::load(
             $this->serviceName,
             $options['clientConfig'],
@@ -559,6 +557,7 @@ trait GapicClientTrait
             case Call::SERVER_STREAMING_CALL:
             case Call::CLIENT_STREAMING_CALL:
             case Call::BIDI_STREAMING_CALL:
+            case Call::RESUMABLE_UPLOAD_CALL:
                 throw new ValidationException("Call type '$callType' of requested method " .
                     "'$methodName' is not supported for async execution.");
         }
