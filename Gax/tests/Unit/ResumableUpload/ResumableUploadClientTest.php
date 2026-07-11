@@ -115,4 +115,16 @@ class ResumableUploadClientTest extends TestCase
             (string) $requests[0]->getUri()
         );
     }
+
+    public function testStartUploadWithoutRequestMessageThrowsException()
+    {
+        $this->expectException(\Google\ApiCore\ValidationException::class);
+        $this->expectExceptionMessage('A request message is required when starting a new resumable upload.');
+
+        $requestBuilder = $this->createMock(\Google\ApiCore\RequestBuilder::class);
+        $httpHandler = function () {};
+        $client = new ResumableUploadClient($requestBuilder, $httpHandler);
+        $upload = new ResumableUpload($client, 'v1/test:create', new \Google\Protobuf\Timestamp());
+        $client->startUpload($upload, Utils::streamFor('hello'), 'v1/test:create', null);
+    }
 }

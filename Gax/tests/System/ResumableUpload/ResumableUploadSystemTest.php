@@ -138,8 +138,9 @@ class ResumableUploadSystemTest extends TestCase
 
         $upload = new ResumableUpload(
             $client,
-            '',
+            'test.method',
             new Timestamp(),
+            null,
             $options
         );
 

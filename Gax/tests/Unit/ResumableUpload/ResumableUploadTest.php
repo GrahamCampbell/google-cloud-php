@@ -49,7 +49,7 @@ class ResumableUploadTest extends TestCase
         $requestBuilder = $this->createMock(\Google\ApiCore\RequestBuilder::class);
         $client = new ResumableUploadClient($requestBuilder, $httpHandler, serviceAddress: 'test.googleapis.com');
 
-        $upload = new ResumableUpload($client, 'v1/test:create', new Timestamp(), [
+        $upload = new ResumableUpload($client, 'v1/test:create', new Timestamp(), null, [
             'chunkSize' => 1024,
             'progressCallback' => function (int $bytes) {
             }
@@ -76,7 +76,7 @@ class ResumableUploadTest extends TestCase
         });
         $client = new ResumableUploadClient($requestBuilder, $httpHandler, serviceAddress: 'test.googleapis.com');
         $callbackUrl = null;
-        $upload = new ResumableUpload($client, 'v1/test:create', new Timestamp(), [
+        $upload = new ResumableUpload($client, 'v1/test:create', new Timestamp(), null, [
             'progressCallback' => function (int $bytes, string $url) use (&$callbackUrl) {
                 $callbackUrl = $url;
             }
@@ -125,7 +125,7 @@ class ResumableUploadTest extends TestCase
 
         $requestBuilder = $this->createMock(\Google\ApiCore\RequestBuilder::class);
         $client = new ResumableUploadClient($requestBuilder, $httpHandler, serviceAddress: 'test.googleapis.com');
-        $upload = new ResumableUpload($client, '', null, ['uploadUrl' => 'https://upload.url/session123']);
+        $upload = new ResumableUpload($client, '', null, 'https://upload.url/session123');
         $this->assertEquals('https://upload.url/session123', $upload->getUploadUrl());
 
         $stream = Utils::streamFor('hello world');
@@ -136,6 +136,16 @@ class ResumableUploadTest extends TestCase
         $this->assertEquals('query', $requests[0]->getHeaderLine('X-Goog-Upload-Command'));
         $this->assertEquals('upload, finalize', $requests[1]->getHeaderLine('X-Goog-Upload-Command'));
         $this->assertEquals(' world', (string) $requests[1]->getBody());
+    }
+
+    public function testInvalidInitializationThrowsException()
+    {
+        $this->expectException(\Google\ApiCore\ValidationException::class);
+        $this->expectExceptionMessage('Cannot initialize ResumableUpload without either a valid ($method, $requestMessage) pair to start an upload, or an $uploadUrl to resume an upload.');
+
+        $requestBuilder = $this->createMock(\Google\ApiCore\RequestBuilder::class);
+        $client = new ResumableUploadClient($requestBuilder, function () {});
+        new ResumableUpload($client, '', null);
     }
 
     private function createMockHttpHandler(array $responses, ?array &$requests = []): callable

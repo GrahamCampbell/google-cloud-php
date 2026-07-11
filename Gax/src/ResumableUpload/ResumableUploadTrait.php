@@ -50,19 +50,27 @@ trait ResumableUploadTrait
      * Resume an existing resumable upload session.
      *
      * @param string $uploadUrl The resumable upload session URL.
-     * @param int $chunkSize Optional. The preferred chunk size in bytes.
+     * @param array $callOptions {
+     *     Optional.
+     *
+     *     @type int $chunkSize Optional. The size of each chunk to upload in bytes.
+     *           Must be a multiple of 262144 (256 KB). Defaults to 8388608 (8 MB).
+     *     @type callable $progressCallback Optional. A callback function executed after
+     *           every chunk upload or query. The callback should accept two arguments:
+     *           (int $bytesUploaded, string $uploadUrl).
+     *     @type array $headers Optional. Key-value array of custom HTTP headers to
+     *           include with upload requests.
+     * }
      * @return ResumableUpload
      */
-    public function resumeUpload(string $uploadUrl, int $chunkSize = 8388608): ResumableUpload
+    public function resumeUpload(string $uploadUrl, array $callOptions = []): ResumableUpload
     {
         return new ResumableUpload(
             $this->resumableUploadClient,
             '',
             null,
-            [
-                'uploadUrl' => $uploadUrl,
-                'chunkSize' => $chunkSize,
-            ]
+            $uploadUrl,
+            $callOptions
         );
     }
 

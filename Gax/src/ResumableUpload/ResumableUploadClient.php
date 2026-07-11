@@ -37,6 +37,7 @@ use Google\ApiCore\ApiException;
 use Google\ApiCore\ApiStatus;
 use Google\ApiCore\CredentialsWrapper;
 use Google\ApiCore\RequestBuilder;
+use Google\ApiCore\ValidationException;
 use Google\Protobuf\Internal\Message;
 use GuzzleHttp\Exception\RequestException;
 use GuzzleHttp\Psr7\Request;
@@ -98,7 +99,19 @@ class ResumableUploadClient
      * @param StreamInterface $dataStream
      * @param string $method
      * @param ?Message $requestMessage
-     * @param array $options
+     * @param array $callOptions {
+     *     Optional.
+     *
+     *     @type int $chunkSize Optional. The size of each chunk to upload in bytes.
+     *           Must be a multiple of 262144 (256 KB). Defaults to 8388608 (8 MB).
+     *     @type callable $progressCallback Optional. A callback function executed after
+     *           every chunk upload or query. The callback should accept two arguments:
+     *           (int $bytesUploaded, string $uploadUrl).
+     *     @type array $headers Optional. Key-value array of custom HTTP headers to
+     *           include with upload requests.
+     *     @type string $uploadUrl Optional. An existing resumable upload session URL
+     *           to resume an upload across process restarts or interruptions.
+     * }
      * @return bool
      * @throws ApiException
      */
@@ -107,26 +120,28 @@ class ResumableUploadClient
         StreamInterface $dataStream,
         string $method = '',
         ?Message $requestMessage = null,
-        array $options = []
+        array $callOptions = []
     ): bool {
-        $uploadUrl = $options['uploadUrl'] ?? null;
+        $uploadUrl = $upload->getUploadUrl() ?? $callOptions['uploadUrl'] ?? null;
         $state = new ResumableUploadState(
-            $options['chunkSize'] ?? self::DEFAULT_CHUNK_SIZE,
-            $options['progressCallback'] ?? null,
-            $options['headers'] ?? [],
+            $callOptions['chunkSize'] ?? self::DEFAULT_CHUNK_SIZE,
+            $callOptions['progressCallback'] ?? null,
+            $callOptions['headers'] ?? [],
             $uploadUrl,
             $uploadUrl !== null ? self::PHASE_RECOVERY : self::PHASE_STARTING
         );
 
         while ($state->phase !== self::PHASE_DONE) {
             $state->phase = match ($state->phase) {
-                self::PHASE_STARTING => $this->phaseStarting(
-                    $state,
-                    $upload,
-                    $dataStream,
-                    $method,
-                    $requestMessage
-                ),
+                self::PHASE_STARTING => $requestMessage !== null
+                    ? $this->phaseStarting(
+                        $state,
+                        $upload,
+                        $dataStream,
+                        $method,
+                        $requestMessage
+                    )
+                    : throw new ValidationException("A request message is required when starting a new resumable upload."),
                 self::PHASE_TRANSMITTING => $this->phaseTransmitting($state, $dataStream),
                 self::PHASE_FINALIZING => $this->phaseFinalizing($state, $dataStream),
                 self::PHASE_RECOVERY => $this->phaseRecovery($state),
@@ -142,7 +157,7 @@ class ResumableUploadClient
         ResumableUpload $upload,
         StreamInterface $dataStream,
         string $method,
-        ?Message $requestMessage
+        Message $requestMessage
     ): string {
         $headers = $state->headers;
         $headers['X-Goog-Upload-Protocol'] = 'resumable';
@@ -151,7 +166,6 @@ class ResumableUploadClient
             $headers['X-Goog-Upload-Header-Content-Length'] = (string) $dataStream->getSize();
         }
 
-        $requestMessage = $requestMessage ?: new \Google\Protobuf\Internal\GPBEmpty();
         $request = $this->requestBuilder->build($method, $requestMessage, $headers);
         if ($this->uploadPrefix !== '' && $this->uploadPrefix !== '/') {
             $uri = $request->getUri();

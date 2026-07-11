@@ -72,7 +72,7 @@ class ResumableUploadTraitTest extends TestCase
         $this->assertIsCallable($clientRef->getProperty('httpHandler')->getValue($uploadClient));
         $this->assertSame($credentialsWrapper, $clientRef->getProperty('credentialsWrapper')->getValue($uploadClient));
 
-        $resumed = $client->resumeUpload('https://upload.url/session123', 1024);
+        $resumed = $client->resumeUpload('https://upload.url/session123', ['chunkSize' => 1024]);
         $this->assertInstanceOf(ResumableUpload::class, $resumed);
 
         $ref = new \ReflectionClass($resumed);

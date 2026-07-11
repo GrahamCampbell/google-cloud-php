@@ -66,14 +66,6 @@ class RequestBuilder
     }
 
     /**
-     * @return string
-     */
-    public function getBaseUri(): string
-    {
-        return $this->baseUri;
-    }
-
-    /**
      * @param string $path
      * @return bool
      */
